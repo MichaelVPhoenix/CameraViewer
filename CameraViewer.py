@@ -14,6 +14,8 @@ from datetime import datetime
 class CameraViewer(QMainWindow):
     def __init__(self):
         super().__init__()
+
+        # Core attributes
         self.camera = None
         self.timer = QTimer()
         self.is_frozen = False
@@ -21,12 +23,39 @@ class CameraViewer(QMainWindow):
         self.flip_horizontal = False
         self.flip_vertical = False
         self.is_fullscreen = False
+        self.current_frame = None
+        self.normal_geometry = None
+        self._hidden_widgets = []
 
         # Mouse tracking for fullscreen mode
         self.mouse_timer = QTimer()
         self.mouse_timer.timeout.connect(self.hide_controls_in_fullscreen)
         self.mouse_hide_delay = 3000  # 3 seconds
 
+        # --- UI Elements (declare all here, configure later) ---
+        # Camera selection
+        self.camera_label = QLabel("Camera:")
+        self.camera_combo = QComboBox()
+        self.refresh_btn = QPushButton("Refresh")
+        self.connect_btn = QPushButton("Connect (Ctrl+O)")
+
+        # Video area
+        self.video_label = QLabel()
+
+        # Flip controls
+        self.flip_h_checkbox = QCheckBox("Flip Horizontally (Ctrl+H)")
+        self.flip_v_checkbox = QCheckBox("Flip Vertically (Ctrl+V)")
+
+        # Action buttons
+        self.freeze_btn = QPushButton("Freeze (Space)")
+        self.save_btn = QPushButton("Save Frame (Ctrl+S)")
+        self.fullscreen_btn = QPushButton("Fullscreen (F11)")
+        self.disconnect_btn = QPushButton("Disconnect (Ctrl+D)")
+
+        # Status label
+        self.status_label = QLabel()
+
+        # Initialize UI
         self.init_ui()
         self.setup_connections()
         self.setup_shortcuts()
@@ -36,73 +65,66 @@ class CameraViewer(QMainWindow):
         self.setWindowTitle("USB Camera Viewer with Freeze")
         self.setGeometry(100, 100, 900, 700)
 
-        # Create central widget and main layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
+        # Menubar
         menubar = self.menuBar()
         help_menu = menubar.addMenu("Help")
-
         about_action = help_menu.addAction("About")
         about_action.triggered.connect(self.show_about)
 
-        # Camera selection layout
+        # --- Camera selection layout ---
         camera_layout = QHBoxLayout()
-        self.camera_label = QLabel("Camera:")
         self.camera_label.setMinimumWidth(60)
         camera_layout.addWidget(self.camera_label)
 
-        self.camera_combo = QComboBox()
         self.camera_combo.setMinimumWidth(200)
         camera_layout.addWidget(self.camera_combo)
 
-        self.connect_btn = QPushButton("Connect (Ctrl+O)")
+        self.refresh_btn.setMaximumWidth(100)
+        self.refresh_btn.clicked.connect(self.find_cameras)
+        camera_layout.addWidget(self.refresh_btn)
+
         self.connect_btn.setMaximumWidth(150)
         camera_layout.addWidget(self.connect_btn)
         camera_layout.addStretch()
         main_layout.addLayout(camera_layout)
 
-        # Video display
-        self.video_label = QLabel()
+        # --- Video display ---
         self.video_label.setStyleSheet("border: 2px solid gray; background-color: black;")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setText("No camera connected")
         self.video_label.setMinimumSize(640, 480)
         main_layout.addWidget(self.video_label)
 
-        # Flip controls
+        # --- Flip controls ---
         flip_layout = QHBoxLayout()
-        self.flip_h_checkbox = QCheckBox("Flip Horizontally (Ctrl+H)")
         flip_layout.addWidget(self.flip_h_checkbox)
-        self.flip_v_checkbox = QCheckBox("Flip Vertically (Ctrl+V)")
         flip_layout.addWidget(self.flip_v_checkbox)
         flip_layout.addStretch()
         main_layout.addLayout(flip_layout)
 
-        # Buttons
+        # --- Action buttons ---
         button_layout = QHBoxLayout()
-        self.freeze_btn = QPushButton("Freeze (Space)")
         self.freeze_btn.setEnabled(False)
         button_layout.addWidget(self.freeze_btn)
 
-        self.save_btn = QPushButton("Save Frame (Ctrl+S)")
         self.save_btn.setEnabled(False)
         button_layout.addWidget(self.save_btn)
 
-        self.fullscreen_btn = QPushButton("Fullscreen (F11)")
         self.fullscreen_btn.setEnabled(False)
         button_layout.addWidget(self.fullscreen_btn)
 
         button_layout.addStretch()
 
-        self.disconnect_btn = QPushButton("Disconnect (Ctrl+D)")
         self.disconnect_btn.setEnabled(False)
         button_layout.addWidget(self.disconnect_btn)
         main_layout.addLayout(button_layout)
 
-        # Status label
-        self.status_label = QLabel("Ready to connect to camera | F11: Fullscreen | Space: Freeze | Ctrl+S: Save")
+        # --- Status label ---
+        self.status_label.setText("Ready to connect to camera | F11: Fullscreen | Space: Freeze | Ctrl+S: Save")
         self.status_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border-radius: 3px;")
         main_layout.addWidget(self.status_label)
 
@@ -209,10 +231,18 @@ class CameraViewer(QMainWindow):
 
     def update_frame(self):
         if not self.camera or not self.camera.isOpened():
+            # Auto-disconnect if camera was lost (e.g. after sleep)
+            if self.camera:
+                self.disconnect_camera()
+                self.status_label.setText("Camera connection lost. Please reconnect.")
             return
+
         if not self.is_frozen:
             ret, frame = self.camera.read()
             if not ret or frame is None:
+                # Same: camera feed died → disconnect
+                self.disconnect_camera()
+                self.status_label.setText("Camera feed unavailable. Please reconnect.")
                 return
             processed_frame = self.apply_flips(frame)
             self.display_frame(processed_frame)
@@ -414,10 +444,10 @@ class CameraViewer(QMainWindow):
 
     def show_about(self):
         about_text = """
-        <h3>USB Camera Viewer with Freeze</h3>
+        <h3>Camera Viewer with Freeze</h3>
         <p>This application allows you to:</p>
         <ul>
-            <li>Connect to available USB cameras</li>
+            <li>Connect to available cameras</li>
             <li>Freeze and unfreeze the live feed</li>
             <li>Flip the video horizontally or vertically</li>
             <li>Save frames and copy them to the clipboard</li>
@@ -428,7 +458,7 @@ class CameraViewer(QMainWindow):
             Redistribution, modification, or commercial use without explicit permission is strictly prohibited.
         </p>
         """
-        QMessageBox.about(self, "About USB Camera Viewer", about_text)
+        QMessageBox.about(self, "About Camera Viewer", about_text)
 
 
 def main():
